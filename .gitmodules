@@ -1,0 +1,23 @@
+[submodule "cli-shell"]
+	path = cli-shell
+	url = git@github.com:chenpc/cli-shell.git
+[submodule "storage-daemon"]
+	path = storage-daemon
+	url = git@github.com:chenpc/storage-daemon.git
+[submodule "libnexus"]
+	path = libnexus
+	url = git@github.com:chenpc/libnexus.git
+[submodule "meta-nexus"]
+	path = meta-nexus
+	url = git@github.com:chenpc/meta-nexus.git
+[submodule "yocto/poky"]
+	path = yocto/poky
+	url = https://git.yoctoproject.org/poky
+	branch = scarthgap
+[submodule "yocto/meta-openembedded"]
+	path = yocto/meta-openembedded
+	url = https://github.com/openembedded/meta-openembedded.git
+	branch = scarthgap
+[submodule "yocto/meta-rust-bin"]
+	path = yocto/meta-rust-bin
+	url = https://github.com/rust-embedded/meta-rust-bin.git

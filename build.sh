@@ -14,6 +14,9 @@ for arg in "$@"; do
     esac
 done
 
+git -C "$SCRIPT_DIR" submodule sync --recursive --quiet
+git -C "$SCRIPT_DIR" submodule update --init --recursive --quiet
+
 cp "$SCRIPT_DIR/meta-nexus/conf/bblayers.conf" "$SCRIPT_DIR/yocto/build/conf/"
 cp "$SCRIPT_DIR/meta-nexus/conf/local.conf" "$SCRIPT_DIR/yocto/build/conf/"
 

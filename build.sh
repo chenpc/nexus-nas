@@ -17,6 +17,9 @@ done
 git -C "$SCRIPT_DIR" submodule sync --recursive --quiet
 git -C "$SCRIPT_DIR" submodule update --init --recursive --quiet
 
+# oe-init-build-env creates yocto/build/conf/ on first run
+cd "$SCRIPT_DIR/yocto" && . poky/oe-init-build-env "$SCRIPT_DIR/yocto/build" > /dev/null
+
 cp "$SCRIPT_DIR/meta-nexus/conf/bblayers.conf" "$SCRIPT_DIR/yocto/build/conf/"
 cp "$SCRIPT_DIR/meta-nexus/conf/local.conf" "$SCRIPT_DIR/yocto/build/conf/"
 
@@ -37,7 +40,7 @@ if [ "$TEST_MODE" = "1" ]; then
     fi
 fi
 
-cd "$SCRIPT_DIR/yocto/build" && . ../poky/oe-init-build-env . > /dev/null && bitbake nexus-image "${ARGS[@]}" || exit $?
+bitbake nexus-image "${ARGS[@]}" || exit $?
 
 if [ "$TEST_MODE" = "1" ]; then
     if [ "$RUN_AFTER" = "1" ]; then

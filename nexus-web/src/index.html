@@ -48,6 +48,10 @@
   /* Users View */
   #users-view { flex: 1; padding: 24px; overflow-y: auto; display: none; }
   #users-view.active { display: block; }
+
+  /* Pools/Blocks/Volumes Views */
+  #pools-view, #blocks-view, #volumes-view { flex: 1; padding: 24px; overflow-y: auto; display: none; }
+  #pools-view.active, #blocks-view.active, #volumes-view.active { display: block; }
   .user-form { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
   .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
   .form-field label { display: block; font-size: 12px; color: #64748b; margin-bottom: 6px; }
@@ -137,6 +141,9 @@
 <div id="sidebar">
   <h1>⚡ Nexus</h1>
   <button class="nav-btn active" onclick="showDashboard()">Dashboard</button>
+  <button class="nav-btn" onclick="showPoolsView()">Pools</button>
+  <button class="nav-btn" onclick="showBlocksView()">Blocks</button>
+  <button class="nav-btn" onclick="showVolumesView()">Volumes</button>
   <div id="service-list"></div>
   <button class="nav-btn" onclick="showUsers()">Users</button>
 </div>
@@ -253,6 +260,62 @@
         </div>
       </div>
     </div>
+
+    <!-- Pools View -->
+    <div id="pools-view">
+      <div style="margin-bottom: 16px;">
+        <button class="form-submit" onclick="openWizard()">+ Create Pool</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Storage Pools</div>
+          <button class="refresh-btn" onclick="loadPoolsTable()">↻ Refresh</button>
+        </div>
+        <div class="card-body">
+          <table class="card-table" id="pools-table">
+            <thead><tr><th>Name</th><th>Status/Health</th><th>Capacity</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Blocks View -->
+    <div id="blocks-view">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Block Devices</div>
+          <button class="refresh-btn" onclick="loadBlocksTable()">↻ Refresh</button>
+        </div>
+        <div class="card-body">
+          <table class="card-table" id="blocks-table">
+            <thead><tr><th>Device</th><th>Size</th><th>Type</th><th>Model</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Volumes View -->
+    <div id="volumes-view">
+      <div style="margin-bottom: 16px;">
+        <button class="form-submit" onclick="openVolumeModal()">+ Create Volume</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Volumes</div>
+          <button class="refresh-btn" onclick="loadVolumesTable()">↻ Refresh</button>
+        </div>
+        <div class="card-body">
+          <table class="card-table" id="volumes-table">
+            <thead><tr><th>Name</th><th>Used/Size</th><th>Available</th><th>Mountpoint</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -299,6 +362,32 @@
       <div class="wizard-actions">
         <button class="wizard-btn-secondary" onclick="wizardPrev(2)">← Back</button>
         <button class="wizard-btn-primary" onclick="createPool()">Create Pool</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create Volume Modal -->
+<div id="volume-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center;">
+  <div class="wizard-content">
+    <div class="wizard-header">
+      <div class="wizard-title">Create Volume</div>
+      <button class="close-btn" onclick="closeVolumeModal()">&times;</button>
+    </div>
+    <div>
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; font-size: 12px; color: #64748b; margin-bottom: 6px;">Volume Name</label>
+        <input type="text" id="volume-name-input" class="wizard-input" placeholder="Enter volume name" />
+      </div>
+      <div style="margin-bottom: 16px;">
+        <label style="display: block; font-size: 12px; color: #64748b; margin-bottom: 6px;">Select Pool</label>
+        <select id="volume-pool-select" class="wizard-input" style="cursor: pointer;">
+          <option value="">-- Select a pool --</option>
+        </select>
+      </div>
+      <div class="wizard-actions">
+        <button class="wizard-btn-secondary" onclick="closeVolumeModal()">Cancel</button>
+        <button class="wizard-btn-primary" onclick="createVolume()">Create Volume</button>
       </div>
     </div>
   </div>
@@ -430,25 +519,33 @@ async function loadBlockDevices() {
   tbody.innerHTML = '<tr><td colspan="3" class="empty"><span class="spinner"></span>Loading...</td></tr>';
 
   try {
-    const r = await fetch('/api/execute', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service: 'block', command: 'list', args: []})
-    });
+    const r = await fetch('/api/blocks');
     const d = await r.json();
 
-    if (d.success && d.message) {
-      const lines = d.message.trim().split('\n').filter(l => l.length > 0);
-      if (lines.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty">No block devices found</td></tr>';
-      } else {
-        tbody.innerHTML = lines.map(line => {
+    // Parse the JSON response (could be object or plain text)
+    if (d) {
+      let rows = [];
+      if (typeof d === 'object' && !Array.isArray(d)) {
+        // If it's a NamedMap object
+        rows = Object.entries(d).map(([name, info]) => {
+          return `<tr><td>${name}</td><td>${info.size || '-'}</td><td>${info.type || '-'}</td></tr>`;
+        });
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        rows = lines.map(line => {
           const parts = line.split(/\s+/);
           return `<tr><td>${parts[0] || '-'}</td><td>${parts[1] || '-'}</td><td>${parts[2] || '-'}</td></tr>`;
-        }).join('');
+        });
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">No block devices found</td></tr>';
+      } else {
+        tbody.innerHTML = rows.join('');
       }
     } else {
-      tbody.innerHTML = `<tr><td colspan="3" class="error">${escapeHtml(d.message || 'Failed to load')}</td></tr>`;
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">No block devices found</td></tr>';
     }
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="3" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
@@ -460,25 +557,33 @@ async function loadPools() {
   tbody.innerHTML = '<tr><td colspan="3" class="empty"><span class="spinner"></span>Loading...</td></tr>';
 
   try {
-    const r = await fetch('/api/execute', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service: 'pool', command: 'list', args: []})
-    });
+    const r = await fetch('/api/pools');
     const d = await r.json();
 
-    if (d.success && d.message) {
-      const lines = d.message.trim().split('\n').filter(l => l.length > 0);
-      if (lines.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty">No pools found</td></tr>';
-      } else {
-        tbody.innerHTML = lines.map(line => {
+    // Parse the JSON response (could be object or plain text)
+    if (d) {
+      let rows = [];
+      if (typeof d === 'object' && !Array.isArray(d)) {
+        // If it's a NamedMap object
+        rows = Object.entries(d).map(([name, info]) => {
+          return `<tr><td>${name}</td><td>${info.health || info.status || '-'}</td><td>${info.size || info.capacity || '-'}</td></tr>`;
+        });
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        rows = lines.map(line => {
           const parts = line.split(/\s+/);
           return `<tr><td>${parts[0] || '-'}</td><td>${parts[1] || '-'}</td><td>${parts[2] || '-'}</td></tr>`;
-        }).join('');
+        });
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">No pools found</td></tr>';
+      } else {
+        tbody.innerHTML = rows.join('');
       }
     } else {
-      tbody.innerHTML = `<tr><td colspan="3" class="error">${escapeHtml(d.message || 'Failed to load')}</td></tr>`;
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">No pools found</td></tr>';
     }
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="3" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
@@ -490,25 +595,33 @@ async function loadVolumes() {
   tbody.innerHTML = '<tr><td colspan="3" class="empty"><span class="spinner"></span>Loading...</td></tr>';
 
   try {
-    const r = await fetch('/api/execute', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service: 'volume', command: 'list', args: []})
-    });
+    const r = await fetch('/api/volumes');
     const d = await r.json();
 
-    if (d.success && d.message) {
-      const lines = d.message.trim().split('\n').filter(l => l.length > 0);
-      if (lines.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="3" class="empty">No volumes found</td></tr>';
-      } else {
-        tbody.innerHTML = lines.map(line => {
+    // Parse the JSON response (could be object or plain text)
+    if (d) {
+      let rows = [];
+      if (typeof d === 'object' && !Array.isArray(d)) {
+        // If it's a NamedMap object
+        rows = Object.entries(d).map(([name, info]) => {
+          return `<tr><td>${name}</td><td>${info.used || info.size || '-'}</td><td>${info.pool || '-'}</td></tr>`;
+        });
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        rows = lines.map(line => {
           const parts = line.split(/\s+/);
           return `<tr><td>${parts[0] || '-'}</td><td>${parts[1] || '-'}</td><td>${parts[2] || '-'}</td></tr>`;
-        }).join('');
+        });
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="empty">No volumes found</td></tr>';
+      } else {
+        tbody.innerHTML = rows.join('');
       }
     } else {
-      tbody.innerHTML = `<tr><td colspan="3" class="error">${escapeHtml(d.message || 'Failed to load')}</td></tr>`;
+      tbody.innerHTML = '<tr><td colspan="3" class="empty">No volumes found</td></tr>';
     }
   } catch(e) {
     tbody.innerHTML = `<tr><td colspan="3" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
@@ -553,31 +666,47 @@ async function openWizard() {
 
   // Load disks
   try {
-    const r = await fetch('/api/execute', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service: 'block', command: 'list', args: []})
-    });
+    const r = await fetch('/api/blocks');
     const d = await r.json();
 
-    if (d.success && d.message) {
-      const lines = d.message.trim().split('\n').filter(l => l.length > 0);
-      const diskList = document.getElementById('disk-list');
-      diskList.innerHTML = lines.map((line, i) => {
-        const parts = line.split(/\s+/);
-        const name = parts[0] || `disk${i}`;
-        const size = parts[1] || 'Unknown';
-        return `<label class="disk-item">
-          <input type="checkbox" value="${name}" onchange="toggleDisk('${name}')">
-          <div class="disk-info">
-            <div class="disk-name">${name}</div>
-            <div class="disk-size">${size}</div>
-          </div>
-        </label>`;
-      }).join('');
+    const diskList = document.getElementById('disk-list');
+    let disks = [];
+
+    // Parse the JSON response (could be object or plain text)
+    if (d) {
+      if (typeof d === 'object' && !Array.isArray(d) && !d.data) {
+        // If it's a NamedMap object
+        disks = Object.entries(d).map(([name, info]) => ({
+          name,
+          size: info.size || 'Unknown'
+        }));
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        disks = lines.map((line, i) => {
+          const parts = line.split(/\s+/);
+          return {
+            name: parts[0] || `disk${i}`,
+            size: parts[1] || 'Unknown'
+          };
+        });
+      }
+    }
+
+    if (disks.length > 0) {
+      diskList.innerHTML = disks.map(disk => `<label class="disk-item">
+        <input type="checkbox" value="${disk.name}" onchange="toggleDisk('${disk.name}')">
+        <div class="disk-info">
+          <div class="disk-name">${disk.name}</div>
+          <div class="disk-size">${disk.size}</div>
+        </div>
+      </label>`).join('');
+    } else {
+      diskList.innerHTML = '<div class="empty">No available disks found</div>';
     }
   } catch(e) {
     console.error('Failed to load disks:', e);
+    document.getElementById('disk-list').innerHTML = `<div class="error">Failed to load disks: ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -630,40 +759,31 @@ async function createPool() {
 
   wizardData.name = name;
 
-  // Build command: pool.create <name> <raid> <disk1> <disk2> ...
-  const args = [name, wizardData.raid, ...wizardData.disks];
-
   closeWizard();
 
-  // Switch to pool service view
-  showService('pool');
-
-  // Execute command
-  const out = document.getElementById('output');
-  const spinner = `<span class="spinner"></span>`;
-  out.innerHTML += `<div class="out-line out-cmd">${spinner}$ pool.create ${args.join(' ')}</div>`;
-  out.scrollTop = out.scrollHeight;
-
   try {
-    const r = await fetch('/api/execute', {
+    const r = await fetch('/api/pools', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({service: 'pool', command: 'create', args})
+      body: JSON.stringify({
+        name: name,
+        raid_type: wizardData.raid,
+        devices: wizardData.disks
+      })
     });
     const d = await r.json();
-    out.lastElementChild.innerHTML = `$ pool.create ${args.join(' ')}`;
-    const cls = d.success ? 'out-ok' : 'out-err';
-    out.innerHTML += `<div class="out-line ${cls}">${escapeHtml(d.message)}</div><div class="out-line"> </div>`;
 
-    if (d.success) {
+    if (d.success || r.status === 201) {
+      alert(`Pool "${name}" created successfully!`);
       // Refresh dashboard
       loadPools();
+      showDashboard();
+    } else {
+      alert('Failed to create pool: ' + (d.error || d.message || 'Unknown error'));
     }
   } catch(e) {
-    out.lastElementChild.innerHTML = `$ pool.create ${args.join(' ')}`;
-    out.innerHTML += `<div class="out-line out-err">Error: ${escapeHtml(e.message)}</div>`;
+    alert('Error creating pool: ' + e.message);
   }
-  out.scrollTop = out.scrollHeight;
 }
 
 function clearOutput() {
@@ -794,6 +914,313 @@ async function changePassword(username) {
     }
   } catch(e) {
     alert('Error: ' + e.message);
+  }
+}
+
+// Pools view functions
+function showPoolsView() {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('page-title').textContent = 'Storage Pools';
+  document.getElementById('page-desc').textContent = 'Manage storage pools';
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('service-view').classList.remove('active');
+  document.getElementById('users-view').classList.remove('active');
+  document.getElementById('pools-view').classList.add('active');
+  document.getElementById('blocks-view').classList.remove('active');
+  document.getElementById('volumes-view').classList.remove('active');
+
+  loadPoolsTable();
+}
+
+async function loadPoolsTable() {
+  const tbody = document.querySelector('#pools-table tbody');
+  tbody.innerHTML = '<tr><td colspan="4" class="empty"><span class="spinner"></span>Loading...</td></tr>';
+
+  try {
+    const r = await fetch('/api/pools');
+    const d = await r.json();
+
+    if (d) {
+      let rows = [];
+      if (typeof d === 'object' && !Array.isArray(d) && !d.data) {
+        // If it's a NamedMap object
+        rows = Object.entries(d).map(([name, info]) => {
+          return `<tr>
+            <td>${name}</td>
+            <td>${info.health || info.status || '-'}</td>
+            <td>${info.size || info.capacity || '-'}</td>
+            <td><button class="action-btn danger" onclick="deletePoolConfirm('${name}')">Destroy</button></td>
+          </tr>`;
+        });
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        rows = lines.map(line => {
+          const parts = line.split(/\s+/);
+          const name = parts[0] || '-';
+          return `<tr>
+            <td>${name}</td>
+            <td>${parts[1] || '-'}</td>
+            <td>${parts[2] || '-'}</td>
+            <td><button class="action-btn danger" onclick="deletePoolConfirm('${name}')">Destroy</button></td>
+          </tr>`;
+        });
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No pools found</td></tr>';
+      } else {
+        tbody.innerHTML = rows.join('');
+      }
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No pools found</td></tr>';
+    }
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function deletePoolConfirm(name) {
+  if (!confirm(`Are you sure you want to destroy pool "${name}"? This will delete all data!`)) return;
+
+  try {
+    const r = await fetch(`/api/pools/${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    });
+    const d = await r.json();
+
+    if (d.success || r.ok) {
+      alert(`Pool "${name}" destroyed successfully`);
+      loadPoolsTable();
+      loadPools(); // Refresh dashboard too
+    } else {
+      alert('Failed to destroy pool: ' + (d.error || d.message || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error destroying pool: ' + e.message);
+  }
+}
+
+// Blocks view functions
+function showBlocksView() {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('page-title').textContent = 'Block Devices';
+  document.getElementById('page-desc').textContent = 'View available block devices';
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('service-view').classList.remove('active');
+  document.getElementById('users-view').classList.remove('active');
+  document.getElementById('pools-view').classList.remove('active');
+  document.getElementById('blocks-view').classList.add('active');
+  document.getElementById('volumes-view').classList.remove('active');
+
+  loadBlocksTable();
+}
+
+async function loadBlocksTable() {
+  const tbody = document.querySelector('#blocks-table tbody');
+  tbody.innerHTML = '<tr><td colspan="4" class="empty"><span class="spinner"></span>Loading...</td></tr>';
+
+  try {
+    const r = await fetch('/api/blocks');
+    const d = await r.json();
+
+    if (d) {
+      let rows = [];
+      if (typeof d === 'object' && !Array.isArray(d) && !d.data) {
+        // If it's a NamedMap object
+        rows = Object.entries(d).map(([name, info]) => {
+          return `<tr>
+            <td>${name}</td>
+            <td>${info.size || '-'}</td>
+            <td>${info.type || '-'}</td>
+            <td>${info.model || '-'}</td>
+          </tr>`;
+        });
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        rows = lines.map(line => {
+          const parts = line.split(/\s+/);
+          return `<tr>
+            <td>${parts[0] || '-'}</td>
+            <td>${parts[1] || '-'}</td>
+            <td>${parts[2] || '-'}</td>
+            <td>${parts[3] || '-'}</td>
+          </tr>`;
+        });
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">No block devices found</td></tr>';
+      } else {
+        tbody.innerHTML = rows.join('');
+      }
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No block devices found</td></tr>';
+    }
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+// Volumes view functions
+function showVolumesView() {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('page-title').textContent = 'Volumes';
+  document.getElementById('page-desc').textContent = 'Manage volumes';
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('service-view').classList.remove('active');
+  document.getElementById('users-view').classList.remove('active');
+  document.getElementById('pools-view').classList.remove('active');
+  document.getElementById('blocks-view').classList.remove('active');
+  document.getElementById('volumes-view').classList.add('active');
+
+  loadVolumesTable();
+}
+
+async function loadVolumesTable() {
+  const tbody = document.querySelector('#volumes-table tbody');
+  tbody.innerHTML = '<tr><td colspan="5" class="empty"><span class="spinner"></span>Loading...</td></tr>';
+
+  try {
+    const r = await fetch('/api/volumes');
+    const d = await r.json();
+
+    if (d) {
+      let rows = [];
+      if (typeof d === 'object' && !Array.isArray(d) && !d.data) {
+        // If it's a NamedMap object
+        rows = Object.entries(d).map(([name, info]) => {
+          return `<tr>
+            <td>${name}</td>
+            <td>${info.used || info.size || '-'}</td>
+            <td>${info.avail || info.available || '-'}</td>
+            <td>${info.mountpoint || info.mount || '-'}</td>
+            <td><button class="action-btn danger" onclick="deleteVolumeConfirm('${name}')">Delete</button></td>
+          </tr>`;
+        });
+      } else if (d.data && typeof d.data === 'string') {
+        // If wrapped in data field as text
+        const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+        rows = lines.map(line => {
+          const parts = line.split(/\s+/);
+          const name = parts[0] || '-';
+          return `<tr>
+            <td>${name}</td>
+            <td>${parts[1] || '-'}</td>
+            <td>${parts[2] || '-'}</td>
+            <td>${parts[3] || '-'}</td>
+            <td><button class="action-btn danger" onclick="deleteVolumeConfirm('${name}')">Delete</button></td>
+          </tr>`;
+        });
+      }
+
+      if (rows.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">No volumes found</td></tr>';
+      } else {
+        tbody.innerHTML = rows.join('');
+      }
+    } else {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No volumes found</td></tr>';
+    }
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="5" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function openVolumeModal() {
+  document.getElementById('volume-modal').style.display = 'flex';
+
+  // Load pools for dropdown
+  try {
+    const r = await fetch('/api/pools');
+    const d = await r.json();
+
+    const select = document.getElementById('volume-pool-select');
+    select.innerHTML = '<option value="">-- Select a pool --</option>';
+
+    if (d && typeof d === 'object' && !Array.isArray(d) && !d.data) {
+      // If it's a NamedMap object
+      Object.keys(d).forEach(poolName => {
+        select.innerHTML += `<option value="${poolName}">${poolName}</option>`;
+      });
+    } else if (d.data && typeof d.data === 'string') {
+      // If wrapped in data field as text
+      const lines = d.data.trim().split('\n').filter(l => l.length > 0);
+      lines.forEach(line => {
+        const poolName = line.split(/\s+/)[0];
+        if (poolName) {
+          select.innerHTML += `<option value="${poolName}">${poolName}</option>`;
+        }
+      });
+    }
+  } catch(e) {
+    console.error('Failed to load pools:', e);
+  }
+}
+
+function closeVolumeModal() {
+  document.getElementById('volume-modal').style.display = 'none';
+  document.getElementById('volume-name-input').value = '';
+  document.getElementById('volume-pool-select').value = '';
+}
+
+async function createVolume() {
+  const name = document.getElementById('volume-name-input').value.trim();
+  const pool = document.getElementById('volume-pool-select').value;
+
+  if (!name) {
+    alert('Please enter a volume name');
+    return;
+  }
+  if (!pool) {
+    alert('Please select a pool');
+    return;
+  }
+
+  closeVolumeModal();
+
+  try {
+    const r = await fetch('/api/volumes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, pool })
+    });
+    const d = await r.json();
+
+    if (d.success || r.status === 201) {
+      alert(`Volume "${name}" created successfully!`);
+      loadVolumesTable();
+      loadVolumes(); // Refresh dashboard too
+    } else {
+      alert('Failed to create volume: ' + (d.error || d.message || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error creating volume: ' + e.message);
+  }
+}
+
+async function deleteVolumeConfirm(dataset) {
+  if (!confirm(`Are you sure you want to delete volume "${dataset}"?`)) return;
+
+  try {
+    const r = await fetch(`/api/volumes/${encodeURIComponent(dataset)}`, {
+      method: 'DELETE'
+    });
+    const d = await r.json();
+
+    if (d.success || r.ok) {
+      alert(`Volume "${dataset}" deleted successfully`);
+      loadVolumesTable();
+      loadVolumes(); // Refresh dashboard too
+    } else {
+      alert('Failed to delete volume: ' + (d.error || d.message || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error deleting volume: ' + e.message);
   }
 }
 

@@ -15,8 +15,6 @@ use libnexus::proto::{
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
@@ -89,6 +87,19 @@ struct ChangePasswordRequest {
 struct LoginRequest {
     username: String,
     password: String,
+}
+
+#[derive(Deserialize)]
+struct CreatePoolRequest {
+    name: String,
+    raid_type: String,
+    devices: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateVolumeRequest {
+    name: String,
+    pool: String,
 }
 
 async fn list_services(State(state): State<AppState>) -> impl IntoResponse {
@@ -262,165 +273,446 @@ async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar, Re
 }
 
 // List users
-async fn list_users() -> impl IntoResponse {
-    let content = match fs::read_to_string("/etc/passwd") {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to read passwd: {}", e)})),
-            )
-                .into_response()
-        }
+async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "user".to_string(),
+        action: "list".to_string(),
+        args: vec![],
     };
 
-    let users: Vec<UserInfo> = content
-        .lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 5 {
-                let username = parts[0].to_string();
-                let uid: u32 = parts[2].parse().ok()?;
-                let comment = parts[4].to_string();
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
 
-                // Include root (uid 0) or normal users (uid >= 1000)
-                if uid == 0 || uid >= 1000 {
-                    return Some(UserInfo {
-                        username,
-                        uid,
-                        comment,
-                    });
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                // Parse the JSON response from message field
+                match serde_json::from_str::<serde_json::Value>(&r.message) {
+                    Ok(data) => {
+                        // Convert NamedMap to Vec<UserInfo>
+                        let users: Vec<UserInfo> = if let Some(obj) = data.as_object() {
+                            obj.iter()
+                                .filter_map(|(username, info)| {
+                                    let uid = info["uid"].as_u64()? as u32;
+                                    let comment = info["comment"].as_str().unwrap_or("").to_string();
+                                    Some(UserInfo {
+                                        username: username.clone(),
+                                        uid,
+                                        comment,
+                                    })
+                                })
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+                        Json(serde_json::json!({"users": users})).into_response()
+                    }
+                    Err(e) => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": format!("Failed to parse response: {}", e)})),
+                    )
+                        .into_response(),
                 }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
             }
-            None
-        })
-        .collect();
-
-    Json(serde_json::json!({"users": users})).into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
 }
 
 // Create user
-async fn create_user(Json(req): Json<CreateUserRequest>) -> impl IntoResponse {
-    // Create user with useradd
-    let mut cmd = Command::new("useradd");
-    cmd.arg("-m");
-    if !req.comment.is_empty() {
-        cmd.arg("-c").arg(&req.comment);
-    }
-    cmd.arg(&req.username);
-
-    let output = match cmd.output() {
-        Ok(o) => o,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to execute useradd: {}", e)})),
-            )
-                .into_response()
-        }
+async fn create_user(
+    State(state): State<AppState>,
+    Json(req): Json<CreateUserRequest>,
+) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "user".to_string(),
+        action: "create".to_string(),
+        args: vec![req.username, req.password, req.comment],
     };
 
-    if !output.status.success() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("useradd failed: {}", String::from_utf8_lossy(&output.stderr))
-            })),
-        )
-            .into_response();
-    }
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
 
-    // Set password using chpasswd (reads from stdin)
-    let chpasswd_input = format!("{}:{}", req.username, req.password);
-    let output = match Command::new("sh")
-        .arg("-c")
-        .arg(format!("echo '{}' | chpasswd", chpasswd_input))
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to set password: {}", e)})),
-            )
-                .into_response()
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({"success": true})),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
         }
-    };
-
-    if !output.status.success() {
-        return (
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": format!("chpasswd failed: {}", String::from_utf8_lossy(&output.stderr))
-            })),
+            Json(serde_json::json!({"error": format!("{}", e)})),
         )
-            .into_response();
+            .into_response(),
     }
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({"success": true})),
-    )
-        .into_response()
 }
 
 // Delete user
-async fn delete_user(Path(username): Path<String>) -> impl IntoResponse {
-    let output = match Command::new("userdel").arg("-r").arg(&username).output() {
-        Ok(o) => o,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to execute userdel: {}", e)})),
-            )
-                .into_response()
-        }
+async fn delete_user(
+    State(state): State<AppState>,
+    Path(username): Path<String>,
+) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "user".to_string(),
+        action: "delete".to_string(),
+        args: vec![username],
     };
 
-    if output.status.success() {
-        Json(serde_json::json!({"success": true})).into_response()
-    } else {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("userdel failed: {}", String::from_utf8_lossy(&output.stderr))
-            })),
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                Json(serde_json::json!({"success": true})).into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
         )
-            .into_response()
+            .into_response(),
     }
 }
 
 // Change password
 async fn change_password(
+    State(state): State<AppState>,
     Path(username): Path<String>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> impl IntoResponse {
-    let chpasswd_input = format!("{}:{}", username, req.password);
-    let output = match Command::new("sh")
-        .arg("-c")
-        .arg(format!("echo '{}' | chpasswd", chpasswd_input))
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to set password: {}", e)})),
-            )
-                .into_response()
-        }
+    let grpc_req = CommandRequest {
+        service: "user".to_string(),
+        action: "passwd".to_string(),
+        args: vec![username, req.password],
     };
 
-    if output.status.success() {
-        Json(serde_json::json!({"success": true})).into_response()
-    } else {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("chpasswd failed: {}", String::from_utf8_lossy(&output.stderr))
-            })),
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                Json(serde_json::json!({"success": true})).into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
         )
-            .into_response()
+            .into_response(),
+    }
+}
+
+// List pools
+async fn list_pools(State(state): State<AppState>) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "pool".to_string(),
+        action: "list".to_string(),
+        args: vec![],
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                // Parse the JSON response
+                match serde_json::from_str::<serde_json::Value>(&r.message) {
+                    Ok(data) => Json(data).into_response(),
+                    Err(_) => {
+                        // If not JSON, return as plain text wrapped in object
+                        Json(serde_json::json!({"data": r.message})).into_response()
+                    }
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// Create pool
+async fn create_pool(
+    State(state): State<AppState>,
+    Json(req): Json<CreatePoolRequest>,
+) -> impl IntoResponse {
+    let mut args = vec![req.name, req.raid_type];
+    args.extend(req.devices);
+
+    let grpc_req = CommandRequest {
+        service: "pool".to_string(),
+        action: "create".to_string(),
+        args,
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({"success": true, "message": r.message})),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// Delete pool
+async fn delete_pool(State(state): State<AppState>, Path(name): Path<String>) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "pool".to_string(),
+        action: "destroy".to_string(),
+        args: vec![name],
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                Json(serde_json::json!({"success": true, "message": r.message})).into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// List blocks
+async fn list_blocks(State(state): State<AppState>) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "block".to_string(),
+        action: "list".to_string(),
+        args: vec![],
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                // Parse the JSON response
+                match serde_json::from_str::<serde_json::Value>(&r.message) {
+                    Ok(data) => Json(data).into_response(),
+                    Err(_) => {
+                        // If not JSON, return as plain text wrapped in object
+                        Json(serde_json::json!({"data": r.message})).into_response()
+                    }
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// List volumes
+async fn list_volumes(State(state): State<AppState>) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "volume".to_string(),
+        action: "list".to_string(),
+        args: vec![],
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                // Parse the JSON response
+                match serde_json::from_str::<serde_json::Value>(&r.message) {
+                    Ok(data) => Json(data).into_response(),
+                    Err(_) => {
+                        // If not JSON, return as plain text wrapped in object
+                        Json(serde_json::json!({"data": r.message})).into_response()
+                    }
+                }
+            } else {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// Create volume
+async fn create_volume(
+    State(state): State<AppState>,
+    Json(req): Json<CreateVolumeRequest>,
+) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "volume".to_string(),
+        action: "create".to_string(),
+        args: vec![req.name, req.pool],
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                (
+                    StatusCode::CREATED,
+                    Json(serde_json::json!({"success": true, "message": r.message})),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+// Delete volume
+async fn delete_volume(
+    State(state): State<AppState>,
+    Path(dataset): Path<String>,
+) -> impl IntoResponse {
+    let grpc_req = CommandRequest {
+        service: "volume".to_string(),
+        action: "delete".to_string(),
+        args: vec![dataset],
+    };
+
+    let mut guard = state.client.lock().await;
+    let result: Result<tonic::Response<CommandResponse>, tonic::Status> =
+        guard.execute(tonic::Request::new(grpc_req)).await;
+
+    match result {
+        Ok(resp) => {
+            let r: CommandResponse = resp.into_inner();
+            if r.success {
+                Json(serde_json::json!({"success": true, "message": r.message})).into_response()
+            } else {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": r.message})),
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
     }
 }
 
@@ -456,6 +748,13 @@ async fn main() -> Result<()> {
         .route("/api/users", post(create_user))
         .route("/api/users/:username", delete(delete_user))
         .route("/api/users/:username/passwd", post(change_password))
+        .route("/api/pools", get(list_pools))
+        .route("/api/pools", post(create_pool))
+        .route("/api/pools/:name", delete(delete_pool))
+        .route("/api/blocks", get(list_blocks))
+        .route("/api/volumes", get(list_volumes))
+        .route("/api/volumes", post(create_volume))
+        .route("/api/volumes/:dataset", delete(delete_volume))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
 
     // Public routes (no authentication)

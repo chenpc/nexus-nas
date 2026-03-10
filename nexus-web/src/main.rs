@@ -14,7 +14,6 @@ use libnexus::proto::{
 };
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
@@ -192,25 +191,32 @@ async fn auth_middleware(
 
 // Password verification
 fn verify_password(username: &str, password: &str) -> bool {
-    const PASSWD_FILE: &str = "/etc/nexus-web.passwd";
-    const DEFAULT_ADMIN_HASH: &str = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918";
-
-    let password_hash = format!("{:x}", Sha256::digest(password.as_bytes()));
-
-    // Try to read password file
-    if let Ok(content) = fs::read_to_string(PASSWD_FILE) {
-        for line in content.lines() {
-            if let Some((user, hash)) = line.split_once(':') {
-                if user == username && hash == password_hash {
-                    return true;
-                }
-            }
+    // Read /etc/shadow to find the user's password hash
+    let shadow_content = match std::fs::read_to_string("/etc/shadow") {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to read /etc/shadow: {}", e);
+            return false;
         }
-        return false;
-    }
+    };
 
-    // Fallback to default root:admin or admin:admin
-    (username == "admin" || username == "root") && password_hash == DEFAULT_ADMIN_HASH
+    for line in shadow_content.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        if parts[0] != username {
+            continue;
+        }
+        let hash = parts[1];
+        // Empty password or disabled account
+        if hash.is_empty() || hash == "!" || hash == "*" || hash == "!!" {
+            return false;
+        }
+        // Verify using pwhash crate (supports $6$ SHA-512, $5$ SHA-256, $1$ MD5)
+        return pwhash::unix::verify(password, hash);
+    }
+    false
 }
 
 // Generate random session token

@@ -1,12 +1,48 @@
 #!/bin/bash
 SCRIPT_DIR="$(realpath "${BASH_SOURCE%/*}")"
 
+show_help() {
+    cat <<EOF
+Usage: $0 [OPTIONS] [BITBAKE_ARGS...]
+
+Build nexus-image using Yocto/bitbake.
+
+OPTIONS:
+  --dev         Use local source trees instead of git checkouts
+                (applies meta-nexus/conf/dev.conf)
+
+  --test        Enable test mode: include nexus-test in the image
+                - Without --run: auto-run tests and power off
+                - With --run: include tests but don't auto-run
+
+  --run         Run QEMU after successful build
+                - Without --test: boot interactive shell
+                - With --test: keep QEMU alive for manual testing
+
+  --help, -h    Show this help message and exit
+
+BITBAKE_ARGS:
+  Additional arguments passed directly to bitbake
+
+EXAMPLES:
+  $0                          # Build image
+  $0 --dev                    # Build using local sources
+  $0 --dev --test             # Build, run tests, auto-poweroff
+  $0 --dev --test --run       # Build, boot QEMU for manual testing
+  $0 --run                    # Build and boot QEMU
+  $0 -c clean                 # Pass -c clean to bitbake
+
+EOF
+    exit 0
+}
+
 DEV_MODE=0
 RUN_AFTER=0
 TEST_MODE=0
 ARGS=()
 for arg in "$@"; do
     case "$arg" in
+        --help|-h) show_help ;;
         --dev) DEV_MODE=1 ;;
         --run) RUN_AFTER=1 ;;
         --test) TEST_MODE=1 ;;

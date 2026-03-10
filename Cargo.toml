@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "nexus-web",
+    "storage-daemon",
 ]
 resolver = "2"

@@ -21,3 +21,6 @@
 [submodule "yocto/meta-rust-bin"]
 	path = yocto/meta-rust-bin
 	url = https://github.com/rust-embedded/meta-rust-bin.git
+[submodule "nexus-web"]
+	path = nexus-web
+	url = git@github.com:chenpc/nexus-web.git

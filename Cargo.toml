@@ -1,10 +1,8 @@
 [workspace]
-members = [
-    "nexus-web",
-]
 exclude = [
     "storage-daemon",
     "libnexus",
     "cli-shell",
+    "nexus-web",
 ]
 resolver = "2"

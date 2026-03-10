@@ -209,8 +209,8 @@ fn verify_password(username: &str, password: &str) -> bool {
         return false;
     }
 
-    // Fallback to default admin:admin
-    username == "admin" && password_hash == DEFAULT_ADMIN_HASH
+    // Fallback to default root:admin or admin:admin
+    (username == "admin" || username == "root") && password_hash == DEFAULT_ADMIN_HASH
 }
 
 // Generate random session token

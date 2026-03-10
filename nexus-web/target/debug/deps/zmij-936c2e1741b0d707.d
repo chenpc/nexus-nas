@@ -1,0 +1,9 @@
+/home/chenpc/git/nexus/nexus-web/target/debug/deps/zmij-936c2e1741b0d707.d: /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/lib.rs /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/stdarch_x86.rs /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/traits.rs
+
+/home/chenpc/git/nexus/nexus-web/target/debug/deps/libzmij-936c2e1741b0d707.rlib: /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/lib.rs /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/stdarch_x86.rs /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/traits.rs
+
+/home/chenpc/git/nexus/nexus-web/target/debug/deps/libzmij-936c2e1741b0d707.rmeta: /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/lib.rs /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/stdarch_x86.rs /home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/traits.rs
+
+/home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/lib.rs:
+/home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/stdarch_x86.rs:
+/home/chenpc/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.21/src/traits.rs:

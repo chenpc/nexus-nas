@@ -1,2 +1,4 @@
 yocto/build/
 .claude/
+target/
+*.o

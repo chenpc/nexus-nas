@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "nexus-web",
+]
+resolver = "2"

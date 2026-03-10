@@ -1,25 +1,34 @@
 use anyhow::Result;
 use axum::{
-    extract::State,
-    http::StatusCode,
-    response::{Html, IntoResponse},
-    routing::{get, post},
+    extract::{Path, State},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Redirect, Response},
+    routing::{delete, get, post},
     Json, Router,
 };
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use libnexus::proto::{
     nexus_service_client::NexusServiceClient, CommandRequest, CommandResponse,
     ListServicesRequest, ListServicesResponse,
 };
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fs;
+use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
 type Client = Arc<Mutex<NexusServiceClient<Channel>>>;
+type SessionStore = Arc<Mutex<HashMap<String, String>>>;
 
 #[derive(Clone)]
 struct AppState {
     client: Client,
+    sessions: SessionStore,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +64,32 @@ struct ServiceInfo {
     name: String,
     description: String,
     commands: Vec<CommandDef>,
+}
+
+#[derive(Serialize)]
+struct UserInfo {
+    username: String,
+    uid: u32,
+    comment: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUserRequest {
+    username: String,
+    password: String,
+    #[serde(default)]
+    comment: String,
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
 }
 
 async fn list_services(State(state): State<AppState>) -> impl IntoResponse {
@@ -135,6 +170,254 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("index.html"))
 }
 
+async fn login_page() -> Html<&'static str> {
+    Html(include_str!("login.html"))
+}
+
+// Authentication middleware
+async fn auth_middleware(
+    jar: CookieJar,
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, Redirect> {
+    if let Some(cookie) = jar.get("nexus_session") {
+        let sessions = state.sessions.lock().await;
+        if sessions.contains_key(cookie.value()) {
+            return Ok(next.run(request).await);
+        }
+    }
+    Err(Redirect::to("/login"))
+}
+
+// Password verification
+fn verify_password(username: &str, password: &str) -> bool {
+    const PASSWD_FILE: &str = "/etc/nexus-web.passwd";
+    const DEFAULT_ADMIN_HASH: &str = "8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918";
+
+    let password_hash = format!("{:x}", Sha256::digest(password.as_bytes()));
+
+    // Try to read password file
+    if let Ok(content) = fs::read_to_string(PASSWD_FILE) {
+        for line in content.lines() {
+            if let Some((user, hash)) = line.split_once(':') {
+                if user == username && hash == password_hash {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Fallback to default admin:admin
+    username == "admin" && password_hash == DEFAULT_ADMIN_HASH
+}
+
+// Generate random session token
+fn generate_token() -> String {
+    let bytes: [u8; 32] = rand::thread_rng().gen();
+    hex::encode(bytes)
+}
+
+// Login handler
+async fn login(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Json(req): Json<LoginRequest>,
+) -> Result<(CookieJar, Redirect), StatusCode> {
+    if verify_password(&req.username, &req.password) {
+        let token = generate_token();
+        let mut sessions = state.sessions.lock().await;
+        sessions.insert(token.clone(), req.username);
+
+        let cookie = Cookie::build(("nexus_session", token))
+            .path("/")
+            .http_only(true)
+            .build();
+
+        Ok((jar.add(cookie), Redirect::to("/")))
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+// Logout handler
+async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar, Redirect) {
+    if let Some(cookie) = jar.get("nexus_session") {
+        let mut sessions = state.sessions.lock().await;
+        sessions.remove(cookie.value());
+    }
+
+    let cookie = Cookie::build(("nexus_session", ""))
+        .path("/")
+        .build();
+
+    (jar.remove(cookie), Redirect::to("/login"))
+}
+
+// List users
+async fn list_users() -> impl IntoResponse {
+    let content = match fs::read_to_string("/etc/passwd") {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read passwd: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    let users: Vec<UserInfo> = content
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 5 {
+                let username = parts[0].to_string();
+                let uid: u32 = parts[2].parse().ok()?;
+                let comment = parts[4].to_string();
+
+                // Include root (uid 0) or normal users (uid >= 1000)
+                if uid == 0 || uid >= 1000 {
+                    return Some(UserInfo {
+                        username,
+                        uid,
+                        comment,
+                    });
+                }
+            }
+            None
+        })
+        .collect();
+
+    Json(serde_json::json!({"users": users})).into_response()
+}
+
+// Create user
+async fn create_user(Json(req): Json<CreateUserRequest>) -> impl IntoResponse {
+    // Create user with useradd
+    let mut cmd = Command::new("useradd");
+    cmd.arg("-m");
+    if !req.comment.is_empty() {
+        cmd.arg("-c").arg(&req.comment);
+    }
+    cmd.arg(&req.username);
+
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to execute useradd: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    if !output.status.success() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("useradd failed: {}", String::from_utf8_lossy(&output.stderr))
+            })),
+        )
+            .into_response();
+    }
+
+    // Set password using chpasswd (reads from stdin)
+    let chpasswd_input = format!("{}:{}", req.username, req.password);
+    let output = match Command::new("sh")
+        .arg("-c")
+        .arg(format!("echo '{}' | chpasswd", chpasswd_input))
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to set password: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    if !output.status.success() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("chpasswd failed: {}", String::from_utf8_lossy(&output.stderr))
+            })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({"success": true})),
+    )
+        .into_response()
+}
+
+// Delete user
+async fn delete_user(Path(username): Path<String>) -> impl IntoResponse {
+    let output = match Command::new("userdel").arg("-r").arg(&username).output() {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to execute userdel: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    if output.status.success() {
+        Json(serde_json::json!({"success": true})).into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("userdel failed: {}", String::from_utf8_lossy(&output.stderr))
+            })),
+        )
+            .into_response()
+    }
+}
+
+// Change password
+async fn change_password(
+    Path(username): Path<String>,
+    Json(req): Json<ChangePasswordRequest>,
+) -> impl IntoResponse {
+    let chpasswd_input = format!("{}:{}", username, req.password);
+    let output = match Command::new("sh")
+        .arg("-c")
+        .arg(format!("echo '{}' | chpasswd", chpasswd_input))
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to set password: {}", e)})),
+            )
+                .into_response()
+        }
+    };
+
+    if output.status.success() {
+        Json(serde_json::json!({"success": true})).into_response()
+    } else {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("chpasswd failed: {}", String::from_utf8_lossy(&output.stderr))
+            })),
+        )
+            .into_response()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -153,13 +436,31 @@ async fn main() -> Result<()> {
     let client: Arc<Mutex<NexusServiceClient<Channel>>> =
         Arc::new(Mutex::new(NexusServiceClient::new(channel)));
 
-    let state = AppState { client };
+    let sessions: SessionStore = Arc::new(Mutex::new(HashMap::new()));
 
-    let app = Router::new()
+    let state = AppState { client, sessions };
+
+    // Protected routes (require authentication)
+    let protected = Router::new()
         .route("/", get(index))
         .route("/index.html", get(index))
         .route("/api/services", get(list_services))
         .route("/api/execute", post(execute))
+        .route("/api/users", get(list_users))
+        .route("/api/users", post(create_user))
+        .route("/api/users/:username", delete(delete_user))
+        .route("/api/users/:username/passwd", post(change_password))
+        .route_layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
+
+    // Public routes (no authentication)
+    let public = Router::new()
+        .route("/login", get(login_page))
+        .route("/login", post(login))
+        .route("/logout", get(logout));
+
+    let app = Router::new()
+        .merge(protected)
+        .merge(public)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;

@@ -14,12 +14,17 @@
   .nav-btn { display: block; width: 100%; padding: 12px 16px; background: none; border: none; color: #94a3b8; text-align: left; cursor: pointer; font-size: 14px; transition: all 0.15s; border-left: 3px solid transparent; }
   .nav-btn:hover { background: #252840; color: #e2e8f0; }
   .nav-btn.active { background: #1e2035; color: #a78bfa; border-left-color: #7c3aed; }
+  #sidebar .logout-btn { margin-top: 20px; color: #ef4444; border-top: 1px solid #2d3148; }
+  #sidebar .logout-btn:hover { background: #2d1618; }
 
   /* Main */
   #main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-  #header { padding: 16px 24px; background: #1a1d2e; border-bottom: 1px solid #2d3148; }
+  #header { padding: 16px 24px; background: #1a1d2e; border-bottom: 1px solid #2d3148; display: flex; justify-content: space-between; align-items: center; }
+  #header .header-left { flex: 1; }
   #header h2 { font-size: 16px; color: #a78bfa; }
   #header .desc { font-size: 13px; color: #64748b; margin-top: 4px; }
+  #header .logout-link { padding: 8px 16px; background: #252840; border: 1px solid #374151; border-radius: 6px; color: #ef4444; text-decoration: none; font-size: 13px; transition: all 0.15s; }
+  #header .logout-link:hover { background: #2d1618; border-color: #ef4444; }
 
   #content { flex: 1; display: flex; overflow: hidden; }
 
@@ -39,6 +44,24 @@
   .card-table tr:last-child td { border-bottom: none; }
   .empty { color: #475569; font-style: italic; padding: 20px; text-align: center; }
   .error { color: #f87171; padding: 12px; background: #2d1618; border-radius: 6px; margin-top: 8px; }
+
+  /* Users View */
+  #users-view { flex: 1; padding: 24px; overflow-y: auto; display: none; }
+  #users-view.active { display: block; }
+  .user-form { background: #1a1d2e; border: 1px solid #2d3148; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  .form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .form-field label { display: block; font-size: 12px; color: #64748b; margin-bottom: 6px; }
+  .form-field input { width: 100%; padding: 8px 12px; background: #0f1117; border: 1px solid #374151; border-radius: 5px; color: #e2e8f0; font-size: 13px; }
+  .form-field input:focus { outline: none; border-color: #7c3aed; }
+  .form-submit { padding: 8px 16px; background: #7c3aed; border: none; border-radius: 5px; color: white; font-size: 13px; cursor: pointer; font-weight: 600; }
+  .form-submit:hover { background: #6d28d9; }
+  .action-btn { padding: 4px 10px; background: #252840; border: 1px solid #374151; border-radius: 4px; color: #94a3b8; cursor: pointer; font-size: 11px; margin-right: 4px; }
+  .action-btn:hover { background: #2d3148; color: #e2e8f0; }
+  .action-btn.danger { color: #ef4444; border-color: #7f1d1d; }
+  .action-btn.danger:hover { background: #2d1618; border-color: #ef4444; }
+  .passwd-row { display: none; }
+  .passwd-row.show { display: table-row; }
+  .passwd-form { display: flex; gap: 8px; align-items: center; }
 
   /* Service View */
   #service-view { flex: 1; display: none; }
@@ -115,12 +138,16 @@
   <h1>⚡ Nexus</h1>
   <button class="nav-btn active" onclick="showDashboard()">Dashboard</button>
   <div id="service-list"></div>
+  <button class="nav-btn" onclick="showUsers()">Users</button>
 </div>
 
 <div id="main">
   <div id="header">
-    <h2 id="page-title">Dashboard</h2>
-    <div class="desc" id="page-desc">System Overview</div>
+    <div class="header-left">
+      <h2 id="page-title">Dashboard</h2>
+      <div class="desc" id="page-desc">System Overview</div>
+    </div>
+    <a href="/logout" class="logout-link">Logout</a>
   </div>
 
   <div id="content">
@@ -187,6 +214,43 @@
       <div id="output-pane">
         <h3>Output <button onclick="clearOutput()">Clear</button></h3>
         <div id="output"></div>
+      </div>
+    </div>
+
+    <!-- Users View -->
+    <div id="users-view">
+      <div class="user-form">
+        <h3 style="color: #a78bfa; margin-bottom: 16px;">Add New User</h3>
+        <form id="add-user-form" onsubmit="addUser(event)">
+          <div class="form-row">
+            <div class="form-field">
+              <label>Username</label>
+              <input type="text" name="username" required>
+            </div>
+            <div class="form-field">
+              <label>Password</label>
+              <input type="password" name="password" required>
+            </div>
+            <div class="form-field">
+              <label>Display Name</label>
+              <input type="text" name="comment">
+            </div>
+          </div>
+          <button type="submit" class="form-submit">Add User</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">System Users</div>
+          <button class="refresh-btn" onclick="loadUsers()">↻ Refresh</button>
+        </div>
+        <div class="card-body">
+          <table class="card-table" id="users-table">
+            <thead><tr><th>Username</th><th>UID</th><th>Comment</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -271,12 +335,25 @@ function showDashboard() {
   document.getElementById('page-desc').textContent = 'System Overview';
   document.getElementById('dashboard').classList.add('active');
   document.getElementById('service-view').classList.remove('active');
+  document.getElementById('users-view').classList.remove('active');
 
   // Load dashboard data
   loadBlockDevices();
   loadPools();
   loadVolumes();
   loadNetwork();
+}
+
+function showUsers() {
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('page-title').textContent = 'User Management';
+  document.getElementById('page-desc').textContent = 'Manage system users';
+  document.getElementById('dashboard').classList.remove('active');
+  document.getElementById('service-view').classList.remove('active');
+  document.getElementById('users-view').classList.add('active');
+
+  loadUsers();
 }
 
 function showService(name) {
@@ -290,6 +367,7 @@ function showService(name) {
   document.getElementById('page-desc').textContent = currentService.description || '';
   document.getElementById('dashboard').classList.remove('active');
   document.getElementById('service-view').classList.add('active');
+  document.getElementById('users-view').classList.remove('active');
 
   renderCommands();
 }
@@ -594,6 +672,129 @@ function clearOutput() {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// User management functions
+async function loadUsers() {
+  const tbody = document.querySelector('#users-table tbody');
+  tbody.innerHTML = '<tr><td colspan="4" class="empty"><span class="spinner"></span>Loading...</td></tr>';
+
+  try {
+    const r = await fetch('/api/users');
+    const d = await r.json();
+
+    if (d.users && d.users.length > 0) {
+      tbody.innerHTML = d.users.map(u => `
+        <tr>
+          <td>${escapeHtml(u.username)}</td>
+          <td>${u.uid}</td>
+          <td>${escapeHtml(u.comment)}</td>
+          <td>
+            <button class="action-btn" onclick="showPasswordForm('${escapeHtml(u.username)}')">Change Password</button>
+            ${u.username !== 'root' ? `<button class="action-btn danger" onclick="deleteUser('${escapeHtml(u.username)}')">Delete</button>` : ''}
+          </td>
+        </tr>
+        <tr class="passwd-row" id="passwd-row-${escapeHtml(u.username)}">
+          <td colspan="4">
+            <div class="passwd-form">
+              <input type="password" id="passwd-input-${escapeHtml(u.username)}" placeholder="New password" style="flex: 1; padding: 6px 10px; background: #0f1117; border: 1px solid #374151; border-radius: 4px; color: #e2e8f0;">
+              <button class="action-btn" onclick="changePassword('${escapeHtml(u.username)}')">Save</button>
+              <button class="action-btn" onclick="hidePasswordForm('${escapeHtml(u.username)}')">Cancel</button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    } else {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No users found</td></tr>';
+    }
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="error">Error: ${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function addUser(event) {
+  event.preventDefault();
+  const form = event.target;
+  const data = {
+    username: form.username.value,
+    password: form.password.value,
+    comment: form.comment.value || ''
+  };
+
+  try {
+    const r = await fetch('/api/users', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+
+    if (r.ok) {
+      form.reset();
+      loadUsers();
+    } else {
+      const d = await r.json();
+      alert('Failed to add user: ' + (d.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function deleteUser(username) {
+  if (!confirm(`Are you sure you want to delete user "${username}"?`)) return;
+
+  try {
+    const r = await fetch(`/api/users/${encodeURIComponent(username)}`, {
+      method: 'DELETE'
+    });
+
+    if (r.ok) {
+      loadUsers();
+    } else {
+      const d = await r.json();
+      alert('Failed to delete user: ' + (d.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+function showPasswordForm(username) {
+  document.querySelectorAll('.passwd-row').forEach(row => row.classList.remove('show'));
+  document.getElementById(`passwd-row-${username}`).classList.add('show');
+}
+
+function hidePasswordForm(username) {
+  document.getElementById(`passwd-row-${username}`).classList.remove('show');
+  document.getElementById(`passwd-input-${username}`).value = '';
+}
+
+async function changePassword(username) {
+  const input = document.getElementById(`passwd-input-${username}`);
+  const password = input.value;
+
+  if (!password) {
+    alert('Please enter a password');
+    return;
+  }
+
+  try {
+    const r = await fetch(`/api/users/${encodeURIComponent(username)}/passwd`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password})
+    });
+
+    if (r.ok) {
+      hidePasswordForm(username);
+      alert('Password changed successfully');
+    } else {
+      const d = await r.json();
+      alert('Failed to change password: ' + (d.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
 }
 
 // Initialize

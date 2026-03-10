@@ -2,4 +2,9 @@
 members = [
     "nexus-web",
 ]
+exclude = [
+    "storage-daemon",
+    "libnexus",
+    "cli-shell",
+]
 resolver = "2"
